@@ -570,9 +570,8 @@ CURLcode Curl_auth_create_ntlm_type3_message(struct Curl_easy *data,
   unsigned int lmrespoff;
   unsigned char lmresp[24]; /* fixed-size */
   unsigned int ntrespoff;
-  unsigned int ntresplen = 24;
-  unsigned char ntresp[24]; /* fixed-size */
-  const unsigned char *ptr_ntresp = &ntresp[0];
+  unsigned int ntresplen = 0;
+  const unsigned char *ptr_ntresp;
   unsigned char *ntlmv2resp = NULL;
   bool unicode = (ntlm->flags & NTLMFLAG_NEGOTIATE_UNICODE);
   /* The fixed hostname we provide, in order to not leak our real local host
@@ -589,8 +588,15 @@ CURLcode Curl_auth_create_ntlm_type3_message(struct Curl_easy *data,
   size_t userlen = 0;
   size_t domlen = 0;
 
+  /* Never respond to a challenge that would downgrade authentication to
+     NTLMv1 (including the weak LM response). */
+  if(!(ntlm->flags & NTLMFLAG_NEGOTIATE_NTLM2_KEY)) {
+    failf(data, "NTLMv1 is not supported");
+    result = CURLE_LOGIN_DENIED;
+    goto error;
+  }
+
   memset(lmresp, 0, sizeof(lmresp));
-  memset(ntresp, 0, sizeof(ntresp));
   user = strchr(userp, '\\');
   if(!user)
     user = strchr(userp, '/');
@@ -606,7 +612,7 @@ CURLcode Curl_auth_create_ntlm_type3_message(struct Curl_easy *data,
   userlen = strlen(user);
   hostlen = sizeof(host) - 1;
 
-  if(ntlm->flags & NTLMFLAG_NEGOTIATE_NTLM2_KEY) {
+  {
     unsigned char ntbuffer[0x18];
     unsigned char entropy[8];
     unsigned char ntlmv2hash[0x18];
@@ -641,30 +647,6 @@ CURLcode Curl_auth_create_ntlm_type3_message(struct Curl_easy *data,
       return result;
 
     ptr_ntresp = ntlmv2resp;
-  }
-  else {
-
-    unsigned char ntbuffer[0x18];
-    unsigned char lmbuffer[0x18];
-
-    /* NTLM version 1 */
-
-    result = Curl_ntlm_core_mk_nt_hash(passwdp, ntbuffer);
-    if(result)
-      return result;
-
-    Curl_ntlm_core_lm_resp(ntbuffer, &ntlm->nonce[0], ntresp);
-
-    result = Curl_ntlm_core_mk_lm_hash(passwdp, lmbuffer);
-    if(result)
-      return result;
-
-    Curl_ntlm_core_lm_resp(lmbuffer, &ntlm->nonce[0], lmresp);
-    ntlm->flags &= ~(unsigned int)NTLMFLAG_NEGOTIATE_NTLM2_KEY;
-
-    /* A safer but less compatible alternative is:
-     *   Curl_ntlm_core_lm_resp(ntbuffer, &ntlm->nonce[0], lmresp);
-     * See https://davenport.sourceforge.net/ntlm.html#ntlmVersion2 */
   }
 
   if(unicode) {
